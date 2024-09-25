@@ -32,12 +32,14 @@ function MainPage() {
 
   return <RoomList />;
 }
-
 function RoomList() {
   const [rooms, setRooms] = useState([]);
   const [error, setError] = useState("");
   const token = localStorage.getItem("token");
   const navigate = useNavigate();
+
+  const decodedToken = decodeToken(token); // JWT 토큰에서 사용자 ID 추출
+  const userId = decodedToken?.id;
 
   // 방 목록 불러오기
   useEffect(() => {
@@ -108,10 +110,10 @@ function RoomList() {
       <ul>
         {rooms.map((room, index) => (
           <li key={index}>
-            {/* 방에 4명이 있으면 버튼 비활성화 */}
+            {/* 이미 방에 참가한 사용자는 비활성화하지 않음 */}
             <button
               onClick={() => joinRoom(room.roomId)}
-              disabled={room.playerCount >= 4}
+              disabled={room.playerCount >= 4 && !room.players.includes(userId)}
             >
               {room.roomId} ({room.playerCount}/4 players)
             </button>
@@ -237,12 +239,35 @@ function Login() {
   );
 }
 
+// JWT 토큰 디코딩 함수
+function decodeToken(token) {
+  if (!token) return null;
+
+  const base64Url = token.split(".")[1];
+  const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
+  const jsonPayload = decodeURIComponent(
+    atob(base64)
+      .split("")
+      .map(function (c) {
+        return "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2);
+      })
+      .join("")
+  );
+
+  return JSON.parse(jsonPayload);
+}
+
 function Room() {
   const { roomId } = useParams();
   const [players, setPlayers] = useState([]);
   const [gameReady, setGameReady] = useState(false);
+  const [isHost, setIsHost] = useState(false); // 호스트 여부
+  const [host, setHost] = useState(""); // 호스트 ID
   const token = localStorage.getItem("token");
   const navigate = useNavigate();
+
+  const decodedToken = decodeToken(token);
+  const userId = decodedToken?.id;
 
   // 방 상태 불러오기
   useEffect(() => {
@@ -252,13 +277,19 @@ function Room() {
       .then((response) => response.json())
       .then((data) => {
         setPlayers(data.players);
-        setGameReady(data.players.length === 4);
+        setHost(data.host);
+        setIsHost(data.host === userId); // 현재 사용자가 호스트인지 확인
+        setGameReady(data.players.length === 4); // 플레이어가 4명일 때만 게임 시작 가능
       });
-  }, [roomId, token]);
+  }, [roomId, token, userId]);
 
-  // 게임 시작
+  // 게임 시작 (호스트만 가능)
   const startGame = () => {
-    alert("Game Started!");
+    if (isHost) {
+      alert("Game Started!");
+    } else {
+      alert("Only the host can start the game");
+    }
   };
 
   // 방 나가기 처리
@@ -287,12 +318,24 @@ function Room() {
       <h2>Players in room:</h2>
       <ul>
         {players.map((player, index) => (
-          <li key={index}>{player}</li>
+          <li key={index}>
+            {player}
+            {player === host && <strong> (호스트)</strong>} {/* 방장 표시 */}
+          </li>
         ))}
       </ul>
       <button onClick={leaveRoom}>Leave Room</button>
-      <button onClick={startGame} disabled={!gameReady}>
-        {gameReady ? "Start Game" : "Waiting for players..."}
+
+      {/* 게임 시작 버튼: 호스트만 가능, 4명이 다 찼을 때만 가능 */}
+      <button
+        onClick={startGame}
+        disabled={!gameReady || !isHost} // 호스트가 아니거나 4명이 찰 때까지 비활성화
+      >
+        {isHost && gameReady
+          ? "Start Game"
+          : !isHost
+          ? "Only the host can start the game"
+          : "Waiting for players..."}
       </button>
     </div>
   );

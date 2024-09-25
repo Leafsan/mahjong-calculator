@@ -85,11 +85,11 @@ app.post("/api/createRoom", (req, res) => {
       return res.status(400).send("Room ID is invalid or already exists");
     }
 
-    // 방 생성
-    rooms[roomId] = [];
-
-    // 방을 생성한 사용자를 자동으로 방에 추가
-    rooms[roomId].push(decoded.id);
+    // 방 생성 및 사용자 추가 / 방 생성자는 호스트로
+    rooms[roomId] = {
+      host: decoded.id,
+      players: [decoded.id],
+    };
 
     res
       .status(201)
@@ -98,6 +98,7 @@ app.post("/api/createRoom", (req, res) => {
     res.status(401).send("Invalid token");
   }
 });
+
 // 방 목록 API (방의 플레이어 수도 함께 반환)
 app.get("/api/rooms", (req, res) => {
   const token = req.headers.authorization?.split(" ")[1];
@@ -110,7 +111,8 @@ app.get("/api/rooms", (req, res) => {
     jwt.verify(token, SECRET_KEY);
     const roomData = Object.keys(rooms).map((roomId) => ({
       roomId,
-      playerCount: rooms[roomId].length,
+      playerCount: rooms[roomId].players.length,
+      players: rooms[roomId].players, // 참가자 목록 반환
     }));
     res.json(roomData);
   } catch (error) {
@@ -132,57 +134,11 @@ app.get("/api/room/:roomId", (req, res) => {
     if (!rooms[roomId]) {
       return res.status(404).send("Room not found");
     }
-    res.json({ players: rooms[roomId] });
+
+    res.json({ players: rooms[roomId].players, host: rooms[roomId].host });
   } catch (error) {
     res.status(401).send("Invalid token");
   }
-});
-
-// Socket.IO를 이용한 방 관리 (게임 시작 로직 포함)
-io.on("connection", (socket) => {
-  console.log("A user connected");
-
-  socket.on("createRoom", (roomId) => {
-    if (!roomId || roomId.trim() === "") {
-      socket.emit("invalidRoomId", "Room ID cannot be empty");
-      return;
-    }
-
-    if (!rooms[roomId]) {
-      rooms[roomId] = [];
-    }
-
-    if (rooms[roomId].length < 4) {
-      rooms[roomId].push(socket.id);
-      socket.join(roomId);
-      console.log(`User ${socket.id} joined room ${roomId}`);
-      io.to(roomId).emit("updateRoom", rooms[roomId]);
-
-      if (rooms[roomId].length === 4) {
-        io.to(roomId).emit("roomReady");
-      }
-    } else {
-      socket.emit("roomFull");
-    }
-  });
-
-  // 사용자가 연결 해제 시 방에서 제거
-  socket.on("disconnect", () => {
-    for (const roomId in rooms) {
-      rooms[roomId] = rooms[roomId].filter((id) => id !== socket.id);
-      if (rooms[roomId].length === 0) {
-        delete rooms[roomId];
-      } else {
-        io.to(roomId).emit("updateRoom", rooms[roomId]);
-      }
-    }
-    console.log(`User ${socket.id} disconnected`);
-  });
-});
-
-// 모든 경로에서 React 앱 제공
-app.get("*", (req, res) => {
-  res.sendFile(path.join(__dirname, "build", "index.html"));
 });
 
 // 방에 참가하는 API
@@ -203,22 +159,23 @@ app.post("/api/joinRoom", (req, res) => {
     }
 
     // 이미 방에 속해 있는지 확인
-    if (rooms[roomId].includes(decoded.id)) {
+    if (rooms[roomId].players.includes(decoded.id)) {
       return res.status(200).send({ message: "Already in the room", roomId });
     }
 
     // 방에 참가할 수 있는지 확인 (최대 4명)
-    if (rooms[roomId].length >= 4) {
+    if (rooms[roomId].players.length >= 4) {
       return res.status(400).send("Room is full");
     }
 
     // 방에 사용자 추가
-    rooms[roomId].push(decoded.id);
+    rooms[roomId].players.push(decoded.id);
     res.status(200).send({ message: "Joined room successfully", roomId });
   } catch (error) {
     res.status(401).send("Invalid token");
   }
 });
+
 // 방에서 나가기 API
 app.post("/api/leaveRoom", (req, res) => {
   const token = req.headers.authorization?.split(" ")[1];
@@ -236,10 +193,12 @@ app.post("/api/leaveRoom", (req, res) => {
     }
 
     // 사용자를 방에서 제거
-    rooms[roomId] = rooms[roomId].filter((id) => id !== decoded.id);
+    rooms[roomId].players = rooms[roomId].players.filter(
+      (id) => id !== decoded.id
+    );
 
     // 방에 남아있는 사용자가 없으면 방 삭제
-    if (rooms[roomId].length === 0) {
+    if (rooms[roomId].players.length === 0) {
       delete rooms[roomId];
     }
 
@@ -247,6 +206,58 @@ app.post("/api/leaveRoom", (req, res) => {
   } catch (error) {
     res.status(401).send("Invalid token");
   }
+});
+
+// Socket.IO를 이용한 방 관리 (게임 시작 로직 포함)
+io.on("connection", (socket) => {
+  console.log("A user connected");
+
+  socket.on("createRoom", (roomId) => {
+    if (!roomId || roomId.trim() === "") {
+      socket.emit("invalidRoomId", "Room ID cannot be empty");
+      return;
+    }
+
+    if (!rooms[roomId]) {
+      rooms[roomId] = {
+        host: socket.id,
+        players: [socket.id],
+      };
+    }
+
+    if (rooms[roomId].players.length < 4) {
+      rooms[roomId].players.push(socket.id);
+      socket.join(roomId);
+      console.log(`User ${socket.id} joined room ${roomId}`);
+      io.to(roomId).emit("updateRoom", rooms[roomId]);
+
+      if (rooms[roomId].players.length === 4) {
+        io.to(roomId).emit("roomReady");
+      }
+    } else {
+      socket.emit("roomFull");
+    }
+  });
+
+  // 사용자가 연결 해제 시 방에서 제거
+  socket.on("disconnect", () => {
+    for (const roomId in rooms) {
+      rooms[roomId].players = rooms[roomId].players.filter(
+        (id) => id !== socket.id
+      );
+      if (rooms[roomId].players.length === 0) {
+        delete rooms[roomId];
+      } else {
+        io.to(roomId).emit("updateRoom", rooms[roomId]);
+      }
+    }
+    console.log(`User ${socket.id} disconnected`);
+  });
+});
+
+// 모든 경로에서 React 앱 제공
+app.get("*", (req, res) => {
+  res.sendFile(path.join(__dirname, "build", "index.html"));
 });
 
 // 서버 실행
