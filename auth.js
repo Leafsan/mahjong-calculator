@@ -1,9 +1,10 @@
-// auth.js
 const express = require("express");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const db = require("./db"); // SQLite 데이터베이스 연결 파일
-const SECRET_KEY = "your_secret_key"; // JWT 토큰 생성에 사용할 비밀 키
+
+require("dotenv").config();
+const SECRET_KEY = process.env.SECRET_KEY;
 
 const router = express.Router();
 
